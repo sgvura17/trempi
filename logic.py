@@ -7,8 +7,6 @@ import streamlit as st
 # מנסה לקחת מהענן, אם לא מצליח (במחשב שלך) לוקח את המפתח הישיר
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
-except:
-    API_KEY = "AIzaSyAnXQ-ES0Ls3JZ0ZwYN-njOF70bFUfqYUg" # לשימוש לוקאלי
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371 
@@ -159,4 +157,5 @@ def calculate_passenger_transit(hub_coords, passenger_dest, arrival_time):
 
     except Exception as e: 
         print(f"Logic Error: {e}")
+
         return None, None, [], None, None, None
