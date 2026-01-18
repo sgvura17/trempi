@@ -76,7 +76,7 @@ def get_route_data(origin, destination, departure_time):
         return None, None, None, None
 
 def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_time, driver_start_coords=None):
-    # בדיקת מרחק אפס - אם קרובים לתחנה, מחזירים 0 זמן ומסלול ריק
+    # בדיקת מרחק אפס
     if driver_start_coords:
         dist_from_start = haversine_distance(driver_start_coords[0], driver_start_coords[1], hub['lat'], hub['lon'])
         if dist_from_start < 0.4: 
@@ -86,7 +86,7 @@ def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_t
     departure_time = ensure_israel_time(departure_time)
     
     best_detour_mins = float('inf')
-    best_route_points = [] # אתחול כרשימה ריקה למקרה חירום
+    best_route_points = []
     best_gate_name = None       
     best_gate_coords = None     
     arrival_time_at_hub = None
@@ -117,23 +117,27 @@ def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_t
     return best_detour_mins, best_route_points, best_gate_name, best_gate_coords, arrival_time_at_hub, segment_traffic_status
 
 
-# --- הפונקציה המתוקנת עם הניתוח הכירורגי ---
+# --- הפונקציה שתוקנה כדי לפתור את ה"חורים השחורים" ---
 def calculate_passenger_transit(origin, passenger_dest, arrival_time):
     gmaps = googlemaps.Client(key=API_KEY)
     arrival_time = ensure_israel_time(arrival_time)
     
     origin_str = ""
-    is_station_origin = False # דגל: האם המוצא הוא תחנה שמית?
+    is_station_origin = False
 
+    # 1. ווידוא שהמוצא הוא שם תחנה מדויק
     if isinstance(origin, str):
         is_station_origin = True
         clean_name = origin.split('(')[0].strip()
-        # מוסיפים ישראל כדי למקד, אבל בלי Train Station בשביל הניסוי, או עם - נבדוק
         origin_str = f"{clean_name} Train Station, Israel"
     elif isinstance(origin, (tuple, list)):
         origin_str = f"{origin[0]},{origin[1]}"
 
-    fake_arrival_time = arrival_time - timedelta(minutes=5)
+    # 2. ה"טריק": חיפוש עמוק לאחור
+    # אנחנו אומרים לגוגל: "תמצא לי רכבות שיצאו 20 דקות לפני שהגעתי".
+    # זה מכריח אותו להחזיר רשימה של רכבות, גם כאלו שהוא חושב שפספסנו.
+    # אנחנו נסנן לבד.
+    fake_arrival_time = arrival_time - timedelta(minutes=20)
     
     selected_route = None
     
@@ -144,52 +148,58 @@ def calculate_passenger_transit(origin, passenger_dest, arrival_time):
             mode="transit", transit_mode="train", departure_time=fake_arrival_time
         )
         
+        # 3. לוגיקת הסינון הידנית שלנו
         if directions:
             for route in directions:
                 leg = route['legs'][0]
                 
-                # --- תיקון באג הליכה מוגזמת ---
-                # אם הצעד הראשון הוא הליכה ארוכה והמוצא הוא תחנה, אנחנו מתעלמים מההליכה הזו
-                # כי אנחנו מניחים שהחייל כבר בתחנה
-                first_step = leg['steps'][0]
-                time_offset_seconds = 0
+                # מציאת זמן היציאה של התחב"צ הראשון (ולא של ההליכה!)
+                first_transit_dep = None
+                for step in leg['steps']:
+                     if step['travel_mode'] == 'TRANSIT':
+                         ts = step['transit_details']['departure_time']['value']
+                         first_transit_dep = datetime.fromtimestamp(ts, IL_TZ)
+                         break
                 
-                if is_station_origin and first_step['travel_mode'] == 'WALKING':
-                    walk_seconds = first_step['duration']['value']
-                    # אם ההליכה גדולה מ-3 דקות (180 שניות), זה חשוד כבאג של גוגל
-                    if walk_seconds > 180:
-                        # אנחנו נחשיב את זמן היציאה כזמן של הצעד *הבא* (התחב"צ עצמו)
-                        # ונבטל את זמן ההליכה מהחישוב
-                        pass # נטפל בזה למטה בחישוב ה-Wait Time
+                # אם לא מצאנו תחב"צ, משתמשים בזמן הכללי
+                if not first_transit_dep:
+                    ts_gen = leg['departure_time']['value']
+                    first_transit_dep = datetime.fromtimestamp(ts_gen, IL_TZ)
+
+                # חישוב הפער: (זמן יציאת הרכבת) פחות (זמן הגעת הנהג)
+                gap_minutes = (first_transit_dep - arrival_time).total_seconds() / 60
                 
-                # בדיקת זמנים
-                dep_time_val = leg['departure_time']['value']
-                dep_time = datetime.fromtimestamp(dep_time_val, IL_TZ)
-                
-                gap_minutes = (dep_time - arrival_time).total_seconds() / 60
-                if gap_minutes >= -2: 
+                # אנחנו מתירים לחייל לרוץ לרכבת עד 2 דקות לפני הזמן
+                # וגם לא רוצים להציג רכבת שמחכים לה שעתיים (נגיד עד 90 דקות)
+                if gap_minutes >= -2 and gap_minutes < 120: 
                     selected_route = route
                     break 
         
+        # אם לא נמצאה רכבת, מנסים שוב בלי "Train Station" (אולי זה צומת?)
+        if not selected_route and is_station_origin:
+             # ניסיון שני: חיפוש כללי
+             directions_retry = gmaps.directions(
+                origin=origin, # השם המקורי של התחנה
+                destination=passenger_dest,
+                mode="transit", departure_time=arrival_time
+             )
+             if directions_retry: selected_route = directions_retry[0]
+
         if not selected_route: return None, None, [], None, None, None
 
         leg = selected_route['legs'][0]
         
-        # --- בניית המסלול מחדש (ללא הליכת הפתיחה המיותרת) ---
+        # --- בניית המסלול (ניקוי הליכות מיותרות) ---
         itinerary = []
-        is_first_step = True
         
         for step in leg['steps']:
             duration = step['duration']['text']
             mode = step.get('travel_mode')
             duration_val = step['duration']['value']
             
-            # אם זה הצעד הראשון, הוא הליכה, הוא ארוך, ואנחנו בתחנה -> דלג עליו!
-            if is_first_step and mode == 'WALKING' and is_station_origin and duration_val > 180:
-                is_first_step = False
+            # אם ההליכה הראשונה ארוכה מ-3 דקות ואנחנו בתחנה - דלג עליה
+            if mode == 'WALKING' and is_station_origin and duration_val > 180 and len(itinerary) == 0:
                 continue 
-            
-            is_first_step = False # אחרי שבדקנו את הראשון, מפסיקים לבדוק
             
             if mode == 'WALKING':
                 if "min" in duration:
@@ -219,20 +229,14 @@ def calculate_passenger_transit(origin, passenger_dest, arrival_time):
         final_arrival_dt = datetime.fromtimestamp(final_arrival_ts, IL_TZ)
         transit_polyline_points = polyline.decode(selected_route['overview_polyline']['points'])
         
-        # חישוב זמן יציאה "אמיתי" (של הרכבת/אוטובוס הראשון, לא ההליכה)
-        # אנחנו מחפשים את הצעד ה-TRANSIT הראשון
-        first_transit_dep = None
+        # חישוב זמנים מדויק לפי הרכבת הראשונה
+        train_departure_dt = datetime.fromtimestamp(leg['departure_time']['value'], IL_TZ)
+        # מנסים לדייק יותר אם יש שלבי ביניים
         for step in leg['steps']:
              if step['travel_mode'] == 'TRANSIT':
                  ts = step['transit_details']['departure_time']['value']
-                 first_transit_dep = datetime.fromtimestamp(ts, IL_TZ)
+                 train_departure_dt = datetime.fromtimestamp(ts, IL_TZ)
                  break
-        
-        if first_transit_dep:
-            train_departure_dt = first_transit_dep
-        else:
-            # Fallback
-            train_departure_dt = datetime.fromtimestamp(leg['departure_time']['value'], IL_TZ)
 
         wait_time_at_platform = int((train_departure_dt - arrival_time).total_seconds() / 60)
         transit_duration_mins = int((final_arrival_dt - train_departure_dt).total_seconds() / 60)
