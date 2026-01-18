@@ -8,9 +8,7 @@ import pytz
 # --- הגדרת שעון ישראל ---
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
-# --- שליפת מפתח API בצורה מאובטחת ---
-# הקוד הזה יחפש את המפתח ב-secrets של Streamlit (בענן או בקובץ המקומי)
-# אם הוא לא ימצא, הוא יעצור ויציג שגיאה ברורה במקום לקרוס
+# --- טיפול במפתח API ---
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
 except Exception:
@@ -25,6 +23,19 @@ def ensure_israel_time(dt_obj):
     if dt_obj.tzinfo is None:
         return IL_TZ.localize(dt_obj)
     return dt_obj.astimezone(IL_TZ)
+
+def reverse_geocode(lat, lon):
+    """ממיר קואורדינטות לכתובת קריאה (Reverse Geocoding)"""
+    try:
+        gmaps = googlemaps.Client(key=API_KEY)
+        # מבקש מגוגל למצוא את הכתובת הקרובה ביותר
+        res = gmaps.reverse_geocode((lat, lon))
+        if res:
+            # מחזיר את הכתובת המפורמטת הראשונה
+            return res[0]['formatted_address']
+    except Exception as e:
+        print(f"Geocoding Error: {e}")
+    return None
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371 
