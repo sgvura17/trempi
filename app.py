@@ -54,10 +54,23 @@ st.markdown("""
 def show_welcome_modal():
     st.markdown("""
     <div style="direction: rtl; text-align: right;">
-    **ברוכים הבאים לאפליקציית הטרמפים החכמה!**<br>
-    כאן תוכלו למצוא את המסלול המשתלם ביותר לנהג ולחייל.
+    
+    **האפליקציה שתעזור לכם למצוא את נקודת ההורדה המושלמת.**
+    
+    🚗 **אתה נהג?** יוצא מהבסיס הביתה ולוקח איתך חייל, אבל הוא גר רחוק?
+    🪖 **אתה חייל?** מחפש טרמפ אבל הנהג לא מגיע בדיוק ליעד שלך?
+    
+    **איך זה עובד?**
+    1. הזינו את **מוצא ויעד הנהג** (אפשר להשתמש במיקום הנוכחי).
+    2. הזינו את **היעד הסופי של החייל** (למשל: "דיזנגוף סנטר").
+    3. לחצו על **"חשב מסלול"**.
+    
+    המערכת תסרוק את המסלול ותמצא צמתים או תחנות רכבת שבהם הנהג יעשה **מינימום עיקוף**, והחייל יקבל **מקסימום נוחות** (רכבת/אוטובוס מהיר ליעד).
+    
+    בהצלחה ונסיעה בטוחה! 🇮🇱
     </div>
     """, unsafe_allow_html=True)
+    
     if st.button("הבנתי, בוא נתחיל! 🚀"):
         st.session_state.first_visit = False
         st.rerun()
@@ -190,9 +203,11 @@ if btn_manual:
             r_points, _, base_sec, base_traf = logic.get_route_data(origin_val, dest_val, dept_dt)
             st.session_state.base_route = r_points
             
-            # השינוי כאן: שליחת נקודת ההתחלה של הנהג (r_points[0]) לבדיקת המרחק
+            # אם r_points קיים, שולחים את נקודת ההתחלה. אם לא, שולחים None
+            start_coord = r_points[0] if r_points else None
+            
             detour, d_points, _, gate_coords, arr_hub, traf_stat = logic.calculate_driver_segment(
-                origin_val, dest_val, target_hub, base_sec, dept_dt, driver_start_coords=r_points[0]
+                origin_val, dest_val, target_hub, base_sec, dept_dt, driver_start_coords=start_coord
             )
             
             if detour is not None and arr_hub is not None:
@@ -240,7 +255,6 @@ if btn_auto:
             for i, station in enumerate(candidates[:limit_check]):
                 my_bar.progress((i + 1) / limit_check, text=f"בודק את {station['name']}...")
                 
-                # השינוי כאן: שליחת r_points[0]
                 detour, d_points, gate_name, gate_coords, arr_hub, traf_stat = logic.calculate_driver_segment(
                     origin_val, dest_val, station, base_sec, dept_dt, driver_start_coords=r_points[0]
                 )
@@ -398,7 +412,10 @@ if st.session_state.base_route:
             sel = st.session_state.best_options.get(active_key)
             
         if sel:
-            folium.PolyLine(sel['route'], color="#e74c3c", weight=5, opacity=0.8).add_to(m)
+            # --- התיקון לשגיאת המפה: בודקים אם יש מסלול לפני שמציירים ---
+            if sel['route'] and len(sel['route']) > 0:
+                folium.PolyLine(sel['route'], color="#e74c3c", weight=5, opacity=0.8).add_to(m)
+            
             if sel.get('transit_route'):
                 folium.PolyLine(sel['transit_route'], color="#2ecc71", weight=5, opacity=0.9, dash_array='10').add_to(m)
                 if len(sel['transit_route']) > 0:
