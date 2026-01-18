@@ -1,12 +1,10 @@
-﻿import googlemaps
+import googlemaps
 import polyline
 import math
 from datetime import datetime, timedelta
-import streamlit as st
 
-# מנסה לקחת מהענן, אם לא מצליח (במחשב שלך) לוקח את המפתח הישיר
-try:
-    API_KEY = st.secrets["GOOGLE_API_KEY"]
+# פשוט וישיר - בלי תנאים ובלי סיבוכים כרגע
+API_KEY = "AIzaSyAnXQ-ES0Ls3JZ0ZwYN-njOF70bFUfqYUg"
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371 
@@ -22,7 +20,7 @@ def get_traffic_status(normal_seconds, traffic_seconds):
     if not traffic_seconds:
         return "Unknown", "gray"
     delay_min = (traffic_seconds - normal_seconds) / 60
-    if delay_min < 5: return "זרום (Free Flow)", "green"
+    if delay_min < 5: return "זורם (Free Flow)", "green"
     elif delay_min < 15: return f"עומס קל (+{int(delay_min)} דק')", "orange"
     else: return f"פקוק (+{int(delay_min)} דק')", "red"
 
@@ -126,7 +124,7 @@ def calculate_passenger_transit(hub_coords, passenger_dest, arrival_time):
         wait_time_at_platform = int((train_departure_dt - arrival_time).total_seconds() / 60)
         transit_polyline_points = polyline.decode(selected_route['overview_polyline']['points'])
         
-        # --- בניית רשימת הוראות מפורטת (Itinerary List) ---
+        # --- Itinerary Construction ---
         itinerary = []
         if 'steps' in leg:
             for step in leg['steps']:
@@ -135,7 +133,6 @@ def calculate_passenger_transit(hub_coords, passenger_dest, arrival_time):
                 
                 if mode == 'WALKING':
                     if "min" in duration:
-                         # הצגת הליכה רק אם היא מעל 2 דקות
                         try:
                             mins = int(duration.split()[0])
                             if mins > 2:
@@ -157,5 +154,4 @@ def calculate_passenger_transit(hub_coords, passenger_dest, arrival_time):
 
     except Exception as e: 
         print(f"Logic Error: {e}")
-
         return None, None, [], None, None, None
