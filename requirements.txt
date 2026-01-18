@@ -5,3 +5,4 @@ streamlit-folium
 pandas
 polyline
 pytz
+streamlit-js-eval
