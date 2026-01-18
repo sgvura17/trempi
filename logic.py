@@ -8,7 +8,6 @@ import pytz
 # --- הגדרת שעון ישראל ---
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
-# --- טיפול במפתח API ---
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
 except Exception:
@@ -18,21 +17,17 @@ except Exception:
 # --- פונקציות עזר ---
 
 def ensure_israel_time(dt_obj):
-    """ממיר זמן נאיבי (בלי אזור זמן) לשעון ישראל"""
     if dt_obj is None: return None
     if dt_obj.tzinfo is None:
         return IL_TZ.localize(dt_obj)
     return dt_obj.astimezone(IL_TZ)
 
 def reverse_geocode(lat, lon):
-    """ממיר קואורדינטות לכתובת קריאה (Reverse Geocoding)"""
     try:
         gmaps = googlemaps.Client(key=API_KEY)
         res = gmaps.reverse_geocode((lat, lon))
-        if res:
-            return res[0]['formatted_address']
-    except Exception as e:
-        print(f"Geocoding Error: {e}")
+        if res: return res[0]['formatted_address']
+    except Exception: pass
     return None
 
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -46,8 +41,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 def get_traffic_status(normal_seconds, traffic_seconds):
-    if not traffic_seconds:
-        return "Unknown", "gray"
+    if not traffic_seconds: return "Unknown", "gray"
     delay_min = (traffic_seconds - normal_seconds) / 60
     if delay_min < 5: return "זורם (Free Flow)", "green"
     elif delay_min < 15: return f"עומס קל (+{int(delay_min)} דק')", "orange"
@@ -69,7 +63,6 @@ def get_route_data(origin, destination, departure_time):
     try:
         gmaps = googlemaps.Client(key=API_KEY)
         departure_time = ensure_israel_time(departure_time)
-        
         directions = gmaps.directions(origin, destination, mode="driving", departure_time=departure_time)
         if not directions: return None, None, None, None
         
@@ -117,48 +110,50 @@ def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_t
         
     return best_detour_mins, best_route_points, best_gate_name, best_gate_coords, arrival_time_at_hub, segment_traffic_status
 
-# --- השינוי הגדול כאן: origin יכול להיות מחרוזת או קואורדינטות ---
+# --- הלוגיקה המשופרת לחייל ---
 def calculate_passenger_transit(origin, passenger_dest, arrival_time):
     gmaps = googlemaps.Client(key=API_KEY)
     arrival_time = ensure_israel_time(arrival_time)
     
-    # טיפול בפורמט המוצא (קואורדינטות מול טקסט)
-    if isinstance(origin, (tuple, list)):
+    origin_str = ""
+    # 1. טיפול חכם בשם התחנה: הוספת "Train Station" כדי למנוע הליכה מהעיר
+    if isinstance(origin, str):
+        # מנקה סוגריים בעברית אם יש, ומוסיף Train Station
+        clean_name = origin.split('(')[0].strip()
+        origin_str = f"{clean_name} Train Station, Israel"
+    elif isinstance(origin, (tuple, list)):
         origin_str = f"{origin[0]},{origin[1]}"
-    else:
-        # אם קיבלנו שם של תחנה, נשתמש בו כמו שהוא כדי להימנע מהליכה מיותרת
-        origin_str = origin
 
-    search_time_back = arrival_time - timedelta(minutes=20)
+    # 2. ה"צ'יט" לפתרון באג ה-2 דקות:
+    # אנחנו מחפשים רכבת כאילו הגענו 5 דקות קודם. 
+    # זה יגרום לגוגל "לתפוס" את הרכבת הקרובה, והמערכת שלנו תציג "לרוץ!" (פער שלילי)
+    fake_arrival_time = arrival_time - timedelta(minutes=5)
+    
     selected_route = None
     
     try:
-        # 1. Search Backwards
+        # ניסיון ראשון: חיפוש רגיל מהזמן המוקדם
         directions = gmaps.directions(
             origin=origin_str,
             destination=passenger_dest,
-            mode="transit", transit_mode="train", departure_time=search_time_back 
+            mode="transit", transit_mode="train", departure_time=fake_arrival_time
         )
+        
+        # לוגיקת בחירה: מחפשים את הרכבת הראשונה שיוצאת *אחרי* ההגעה האמיתית (או ממש קרוב אליה)
         if directions:
             for route in directions:
                 leg = route['legs'][0]
                 dep_time_val = leg['departure_time']['value']
                 dep_time = datetime.fromtimestamp(dep_time_val, IL_TZ)
                 
+                # חישוב הפער מההגעה *האמיתית* (לא המזויפת)
                 gap_minutes = (dep_time - arrival_time).total_seconds() / 60
-                if gap_minutes >= -1: 
+                
+                # אנחנו מתירים גם מינוס קטן (למשל מינוס 2 דקות) כי אולי החייל ירוץ
+                if gap_minutes >= -2: 
                     selected_route = route
                     break 
         
-        # 2. Fallback Forward
-        if not selected_route:
-            directions_forward = gmaps.directions(
-                origin=origin_str,
-                destination=passenger_dest,
-                mode="transit", departure_time=arrival_time
-            )
-            if directions_forward: selected_route = directions_forward[0]
-
         if not selected_route: return None, None, [], None, None, None
 
         leg = selected_route['legs'][0]
@@ -170,10 +165,10 @@ def calculate_passenger_transit(origin, passenger_dest, arrival_time):
         train_departure_timestamp = leg['departure_time']['value']
         train_departure_dt = datetime.fromtimestamp(train_departure_timestamp, IL_TZ)
         
+        # חישוב זמן המתנה אמיתי
         wait_time_at_platform = int((train_departure_dt - arrival_time).total_seconds() / 60)
         transit_polyline_points = polyline.decode(selected_route['overview_polyline']['points'])
         
-        # --- Itinerary Construction ---
         itinerary = []
         if 'steps' in leg:
             for step in leg['steps']:
@@ -184,10 +179,8 @@ def calculate_passenger_transit(origin, passenger_dest, arrival_time):
                     if "min" in duration:
                         try:
                             mins = int(duration.split()[0])
-                            # סינון אגרסיבי: רק אם ההליכה היא מעל 5 דקות נציג אותה
-                            # (זה מסנן הליכות קצרות בתוך התחנה)
-                            if mins > 5:
-                                itinerary.append(f"🚶 הליכה ({duration})")
+                            # מסנן הליכות קצרות בתוך התחנה
+                            if mins > 5: itinerary.append(f"🚶 הליכה ({duration})")
                         except: pass
                 
                 elif mode == 'TRANSIT':
