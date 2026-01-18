@@ -75,22 +75,18 @@ def get_route_data(origin, destination, departure_time):
         print(f"API Error: {e}")
         return None, None, None, None
 
-# --- השינוי כאן: הוספנו פרמטר driver_start_coords ---
 def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_time, driver_start_coords=None):
-    
-    # 1. בדיקת "מרחק אפס" (Zero Distance Check)
-    # אם הנהג נמצא פיזית במרחק של פחות מ-400 מטר מהתחנה, נבטל את הנסיעה המיותרת
+    # בדיקת מרחק אפס - אם קרובים לתחנה, מחזירים 0 זמן ומסלול ריק
     if driver_start_coords:
         dist_from_start = haversine_distance(driver_start_coords[0], driver_start_coords[1], hub['lat'], hub['lon'])
-        if dist_from_start < 0.4: # פחות מ-400 מטר
-            # מחזירים תוצאה מיידית כאילו כבר הגענו
+        if dist_from_start < 0.4: 
             return 0, [], hub['name'], (hub['lat'], hub['lon']), departure_time, ("כבר במקום", "green")
 
     gmaps = googlemaps.Client(key=API_KEY)
     departure_time = ensure_israel_time(departure_time)
     
     best_detour_mins = float('inf')
-    best_route_points = None
+    best_route_points = [] # אתחול כרשימה ריקה למקרה חירום
     best_gate_name = None       
     best_gate_coords = None     
     arrival_time_at_hub = None
@@ -120,13 +116,19 @@ def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_t
         
     return best_detour_mins, best_route_points, best_gate_name, best_gate_coords, arrival_time_at_hub, segment_traffic_status
 
+
+# --- הפונקציה המתוקנת עם הניתוח הכירורגי ---
 def calculate_passenger_transit(origin, passenger_dest, arrival_time):
     gmaps = googlemaps.Client(key=API_KEY)
     arrival_time = ensure_israel_time(arrival_time)
     
     origin_str = ""
+    is_station_origin = False # דגל: האם המוצא הוא תחנה שמית?
+
     if isinstance(origin, str):
+        is_station_origin = True
         clean_name = origin.split('(')[0].strip()
+        # מוסיפים ישראל כדי למקד, אבל בלי Train Station בשביל הניסוי, או עם - נבדוק
         origin_str = f"{clean_name} Train Station, Israel"
     elif isinstance(origin, (tuple, list)):
         origin_str = f"{origin[0]},{origin[1]}"
@@ -145,6 +147,22 @@ def calculate_passenger_transit(origin, passenger_dest, arrival_time):
         if directions:
             for route in directions:
                 leg = route['legs'][0]
+                
+                # --- תיקון באג הליכה מוגזמת ---
+                # אם הצעד הראשון הוא הליכה ארוכה והמוצא הוא תחנה, אנחנו מתעלמים מההליכה הזו
+                # כי אנחנו מניחים שהחייל כבר בתחנה
+                first_step = leg['steps'][0]
+                time_offset_seconds = 0
+                
+                if is_station_origin and first_step['travel_mode'] == 'WALKING':
+                    walk_seconds = first_step['duration']['value']
+                    # אם ההליכה גדולה מ-3 דקות (180 שניות), זה חשוד כבאג של גוגל
+                    if walk_seconds > 180:
+                        # אנחנו נחשיב את זמן היציאה כזמן של הצעד *הבא* (התחב"צ עצמו)
+                        # ונבטל את זמן ההליכה מהחישוב
+                        pass # נטפל בזה למטה בחישוב ה-Wait Time
+                
+                # בדיקת זמנים
                 dep_time_val = leg['departure_time']['value']
                 dep_time = datetime.fromtimestamp(dep_time_val, IL_TZ)
                 
@@ -156,46 +174,69 @@ def calculate_passenger_transit(origin, passenger_dest, arrival_time):
         if not selected_route: return None, None, [], None, None, None
 
         leg = selected_route['legs'][0]
-        transit_duration_mins = int(leg['duration']['value'] / 60)
         
-        arrival_at_final_dest_timestamp = leg['arrival_time']['value']
-        final_arrival_dt = datetime.fromtimestamp(arrival_at_final_dest_timestamp, IL_TZ)
+        # --- בניית המסלול מחדש (ללא הליכת הפתיחה המיותרת) ---
+        itinerary = []
+        is_first_step = True
         
-        train_departure_timestamp = leg['departure_time']['value']
-        train_departure_dt = datetime.fromtimestamp(train_departure_timestamp, IL_TZ)
-        
-        wait_time_at_platform = int((train_departure_dt - arrival_time).total_seconds() / 60)
+        for step in leg['steps']:
+            duration = step['duration']['text']
+            mode = step.get('travel_mode')
+            duration_val = step['duration']['value']
+            
+            # אם זה הצעד הראשון, הוא הליכה, הוא ארוך, ואנחנו בתחנה -> דלג עליו!
+            if is_first_step and mode == 'WALKING' and is_station_origin and duration_val > 180:
+                is_first_step = False
+                continue 
+            
+            is_first_step = False # אחרי שבדקנו את הראשון, מפסיקים לבדוק
+            
+            if mode == 'WALKING':
+                if "min" in duration:
+                    try:
+                        mins = int(duration.split()[0])
+                        if mins > 5: itinerary.append(f"🚶 הליכה ({duration})")
+                    except: pass
+            
+            elif mode == 'TRANSIT':
+                details = step.get('transit_details', {})
+                line = details.get('line', {})
+                vehicle = line.get('vehicle', {}).get('name', 'Bus')
+                short_name = line.get('short_name', '') 
+                headsign = details.get('headsign', '') 
+                
+                step_dep_ts = details.get('departure_time', {}).get('value')
+                if step_dep_ts:
+                    step_time_str = datetime.fromtimestamp(step_dep_ts, IL_TZ).strftime("%H:%M")
+                else:
+                    step_time_str = details.get('departure_time', {}).get('text', '')
+
+                info = f"🚆 {vehicle} **{short_name}** לכיוון {headsign}" if short_name else f"🚌 {vehicle} לכיוון {headsign}"
+                itinerary.append(f"{info} (יוצא ב-{step_time_str})")
+
+        # נתונים סופיים
+        final_arrival_ts = leg['arrival_time']['value']
+        final_arrival_dt = datetime.fromtimestamp(final_arrival_ts, IL_TZ)
         transit_polyline_points = polyline.decode(selected_route['overview_polyline']['points'])
         
-        itinerary = []
-        if 'steps' in leg:
-            for step in leg['steps']:
-                duration = step['duration']['text']
-                mode = step.get('travel_mode')
-                
-                if mode == 'WALKING':
-                    if "min" in duration:
-                        try:
-                            mins = int(duration.split()[0])
-                            if mins > 5: itinerary.append(f"🚶 הליכה ({duration})")
-                        except: pass
-                
-                elif mode == 'TRANSIT':
-                    details = step.get('transit_details', {})
-                    line = details.get('line', {})
-                    vehicle = line.get('vehicle', {}).get('name', 'Bus')
-                    short_name = line.get('short_name', '') 
-                    headsign = details.get('headsign', '') 
-                    
-                    step_dep_ts = details.get('departure_time', {}).get('value')
-                    if step_dep_ts:
-                        step_time_str = datetime.fromtimestamp(step_dep_ts, IL_TZ).strftime("%H:%M")
-                    else:
-                        step_time_str = details.get('departure_time', {}).get('text', '')
+        # חישוב זמן יציאה "אמיתי" (של הרכבת/אוטובוס הראשון, לא ההליכה)
+        # אנחנו מחפשים את הצעד ה-TRANSIT הראשון
+        first_transit_dep = None
+        for step in leg['steps']:
+             if step['travel_mode'] == 'TRANSIT':
+                 ts = step['transit_details']['departure_time']['value']
+                 first_transit_dep = datetime.fromtimestamp(ts, IL_TZ)
+                 break
+        
+        if first_transit_dep:
+            train_departure_dt = first_transit_dep
+        else:
+            # Fallback
+            train_departure_dt = datetime.fromtimestamp(leg['departure_time']['value'], IL_TZ)
 
-                    info = f"🚆 {vehicle} **{short_name}** לכיוון {headsign}" if short_name else f"🚌 {vehicle} לכיוון {headsign}"
-                    itinerary.append(f"{info} (יוצא ב-{step_time_str})")
-                    
+        wait_time_at_platform = int((train_departure_dt - arrival_time).total_seconds() / 60)
+        transit_duration_mins = int((final_arrival_dt - train_departure_dt).total_seconds() / 60)
+
         return transit_duration_mins, final_arrival_dt, itinerary, train_departure_dt, wait_time_at_platform, transit_polyline_points
 
     except Exception as e: 
