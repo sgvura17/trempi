@@ -67,7 +67,7 @@ if 'first_visit' not in st.session_state: st.session_state.first_visit = True
 
 if 'driver_origin' not in st.session_state: st.session_state.driver_origin = ""
 if 'driver_dest' not in st.session_state: st.session_state.driver_dest = ""
-if 'passenger_dest' not in st.session_state: st.session_state.passenger_dest = "" # יעד חייל בטקסט
+if 'passenger_dest' not in st.session_state: st.session_state.passenger_dest = "" 
 
 if 'trip_date' not in st.session_state: st.session_state.trip_date = date.today()
 if 'trip_time' not in st.session_state: 
@@ -101,7 +101,6 @@ with st.sidebar:
     # --- DRIVER SECTION ---
     st.subheader("🚗 מסלול הנהג")
     
-    # 1. מיקום נוכחי
     loc = get_geolocation()
     if loc:
         lat = loc.get('coords', {}).get('latitude')
@@ -113,7 +112,6 @@ with st.sidebar:
                     st.session_state.driver_origin = address
                     st.rerun()
 
-    # 2. כפתורים מהירים נהג
     col_p1, col_p2 = st.columns(2)
     with col_p1:
         if st.button("🏠 הביתה", key="drv_home"): set_location('driver_dest', 'Tel Aviv') 
@@ -132,14 +130,12 @@ with st.sidebar:
     # --- PASSENGER SECTION ---
     st.subheader("🪖 פרטי החייל")
     
-    # כפתורים מהירים חייל
     col_soldier1, col_soldier2 = st.columns(2)
     with col_soldier1:
         if st.button("🏠 הביתה", key="soldier_home"): set_location('passenger_dest', 'Haifa')
     with col_soldier2:
         if st.button("🪖 לבסיס", key="soldier_base"): set_location('passenger_dest', 'Kiryat HaHadracha')
         
-    # כאן השינוי: במקום SelectBox, טקסט חופשי
     st.text_input("לאן החייל צריך להגיע בסוף?", key='passenger_dest', placeholder="לדוגמה: דיזנגוף סנטר / עיר הבה\"דים")
     
     st.divider()
@@ -152,7 +148,6 @@ with st.sidebar:
     btn_auto = st.button("🚀 חשב מסלול אופטימלי", type="primary", use_container_width=True)
     
     st.divider()
-    # בדיקה ידנית - כאן עדיין בוחרים תחנה, אבל היעד הסופי הוא הכתובת שהוזנה
     with st.expander("🕵️ חשדניסט? בדיקת תחנה ספציפית"):
         manual_station_name = st.selectbox("בחר תחנת הורדה לבדיקה:", hub_names, key='manual_station_select')
         btn_manual = st.button("בדוק את התחנה הזו 🎯", use_container_width=True)
@@ -170,7 +165,7 @@ dept_dt = il_tz.localize(dept_dt_naive)
 
 origin_val = st.session_state.driver_origin
 dest_val = st.session_state.driver_dest
-pass_dest_val = st.session_state.passenger_dest # היעד הסופי של החייל (טקסט)
+pass_dest_val = st.session_state.passenger_dest
 
 def validate_inputs():
     now = datetime.now(il_tz)
@@ -200,9 +195,9 @@ if btn_manual:
             )
             
             if detour is not None and arr_hub is not None:
-                # שולחים לחישוב את היעד הסופי של החייל (הכתובת)
+                # --- תיקון: שליחת שם התחנה במקום קואורדינטות כדי למנוע הליכה מיותרת ---
                 tr_min, fin_arr, itin, _, gap, tr_shape = logic.calculate_passenger_transit(
-                    gate_coords, pass_dest_val, arr_hub
+                    target_hub['name'], pass_dest_val, arr_hub
                 )
                 
                 res = {
@@ -249,9 +244,9 @@ if btn_auto:
                 )
                 
                 if detour is not None and detour <= MAX_DETOUR:
-                    # שינוי: מעבירים את הכתובת החופשית של החייל
+                    # --- תיקון: שליחת שם התחנה במקום קואורדינטות ---
                     tr_min, fin_arr, itin, dep_tm, gap, tr_shape = logic.calculate_passenger_transit(
-                        gate_coords, pass_dest_val, arr_hub
+                        station['name'], pass_dest_val, arr_hub
                     )
                     
                     if tr_min is not None:
@@ -273,7 +268,7 @@ if btn_auto:
             # Full Ride
             driver_dest_arrival = dept_dt + timedelta(seconds=base_traf)
             end_coords = r_points[-1]
-            # שינוי: מעבירים את הכתובת החופשית של החייל
+            # כאן אנחנו חייבים לשלוח קואורדינטות כי זו כתובת אקראית ולא תחנה
             tr_min_full, fin_arr_full, itin_full, _, gap_full, tr_shape_full = logic.calculate_passenger_transit(
                 end_coords, pass_dest_val, driver_dest_arrival
             )
@@ -346,7 +341,6 @@ def render_card_content(data, title, icon, is_manual=False):
         with c_waze: st.link_button("🚗 Waze לנהג", waze_url, use_container_width=True)
         with c_gmaps: st.link_button("🗺️ מפה", gmaps_url, use_container_width=True)
 
-        # כפתור וואטסאפ
         msg_text = f"היי! אני מוריד אותך ב*{data['name']}* ב-{fmt_time(data['arr_hub'])}.\n" \
                    f"משם יש לך: {data['itinerary'][0] if data['itinerary'] else 'תחבורה'}."
         encoded_msg = urllib.parse.quote(msg_text)
@@ -359,14 +353,12 @@ def render_card_content(data, title, icon, is_manual=False):
         st.warning(f"❌ הגעה לתחנה ב-{fmt_time(data['arr_hub'])}, אך לא נמצא חיבור תחב\"צ ליעד הסופי.")
         st.metric("עיקוף לנהג", f"{data['detour']} דק'")
 
-# 1. Manual Result
 if st.session_state.manual_result:
     with st.container(border=True):
         render_card_content(st.session_state.manual_result, "בדיקה ספציפית", "🎯", is_manual=True)
         if st.button("הצג במפה 👁️", key="btn_manual_map", use_container_width=True):
              st.session_state.selected_opt_key = 'manual'
 
-# 2. Auto Results
 elif st.session_state.best_options:
     opts = st.session_state.best_options
     c1, c2, c3 = st.columns(3)
@@ -385,7 +377,6 @@ elif st.session_state.best_options:
     render_auto_card(c2, "נוח לנהג", "🧘", 'driver')
     render_auto_card(c3, "נסיעה מלאה", "🤝", 'full')
 
-# --- MAP RENDER ---
 if st.session_state.base_route:
     st.divider()
     try:
