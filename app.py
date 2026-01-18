@@ -3,6 +3,10 @@ from datetime import datetime, timedelta, date, time
 import folium
 from streamlit_folium import st_folium
 import streamlit.components.v1 as components
+import pytz
+
+# ספריה למיקום נוכחי
+from streamlit_js_eval import get_geolocation
 
 # --- IMPORTS ---
 import logic 
@@ -38,7 +42,6 @@ st.markdown("""
         width: 100%;
     }
     
-    /* עיצוב מיוחד לכרטיס בדיקה ידנית */
     .manual-card {
         border: 2px solid #ffa500;
         padding: 10px;
@@ -52,23 +55,10 @@ st.markdown("""
 def show_welcome_modal():
     st.markdown("""
     <div style="direction: rtl; text-align: right;">
-    
-    **האפליקציה שתעזור לכם למצוא את נקודת ההורדה המושלמת.**
-    
-    🚗 **אתה נהג?** יוצא מהבסיס הביתה ולוקח איתך חייל, אבל הוא גר רחוק?
-    🪖 **אתה חייל?** מחפש טרמפ אבל הנהג לא מגיע בדיוק ליעד שלך?
-    
-    **איך זה עובד?**
-    1. הזינו את **מוצא ויעד הנהג**.
-    2. הזינו את **היעד הסופי של החייל**.
-    3. לחצו על **"חשב מסלול"**.
-    
-    המערכת תסרוק את המסלול ותמצא צמתים או תחנות רכבת שבהם הנהג יעשה **מינימום עיקוף**, והחייל יקבל **מקסימום נוחות** (רכבת/אוטובוס מהיר ליעד).
-    
-    בהצלחה ונסיעה בטוחה! 🇮🇱
+    **ברוכים הבאים לאפליקציית הטרמפים החכמה!**<br>
+    כאן תוכלו למצוא את המסלול המשתלם ביותר לנהג ולחייל.
     </div>
     """, unsafe_allow_html=True)
-    
     if st.button("הבנתי, בוא נתחיל! 🚀"):
         st.session_state.first_visit = False
         st.rerun()
@@ -79,9 +69,7 @@ if 'first_visit' not in st.session_state: st.session_state.first_visit = True
 if 'driver_origin' not in st.session_state: st.session_state.driver_origin = "Kibbutz Beeri"
 if 'driver_dest' not in st.session_state: st.session_state.driver_dest = "Rishon LeTsion"
 
-if 'trip_date' not in st.session_state: 
-    st.session_state.trip_date = date.today()
-
+if 'trip_date' not in st.session_state: st.session_state.trip_date = date.today()
 if 'trip_time' not in st.session_state: 
     next_hour = (datetime.now() + timedelta(hours=1)).replace(minute=0, second=0)
     st.session_state.trip_time = next_hour.time()
@@ -108,6 +96,25 @@ with st.sidebar:
     st.divider()
 
     st.subheader("🚗 מסלול הנהג")
+    
+    # --- כפתור מיקום נוכחי ---
+    # הספריה get_geolocation עובדת קצת שונה מכפתור רגיל. היא מחזירה את המיקום ברגע שהדף נטען.
+    # אנחנו נשתמש בזה כדי לאכלס את השדה אם המיקום קיים בזיכרון.
+    loc = get_geolocation()
+    if loc:
+        # בדיקה שהמיקום תקין
+        lat = loc.get('coords', {}).get('latitude')
+        lon = loc.get('coords', {}).get('longitude')
+        if lat and lon:
+            # כפתור שמופיע רק כשיש מיקום זמין מהדפדפן
+            if st.button(f"📍 השתמש במיקום הנוכחי שלי", help="לחץ כדי להעתיק את המיקום למוצא"):
+                address = logic.reverse_geocode(lat, lon)
+                if address:
+                    st.session_state.driver_origin = address
+                    st.success("המיקום עודכן!")
+                    st.rerun() # רענון כדי שהשדה יתעדכן ויזואלית
+    # ---------------------------
+
     st.text_input("מוצא (מאיפה יוצאים?)", key='driver_origin')
     
     col_swap, col_dummy = st.columns([1, 4])
@@ -132,10 +139,8 @@ with st.sidebar:
     
     btn_auto = st.button("🚀 חשב מסלול אופטימלי", type="primary", use_container_width=True)
     
-    # --- MANUAL CHECK SECTION ---
     st.divider()
     with st.expander("🕵️ חשדניסט? בדיקת תחנה ספציפית"):
-        st.caption("אם אתה לא סומך על האלגוריתם, בחר תחנה ונבדוק ספציפית אותה.")
         manual_station_name = st.selectbox("בחר תחנה לבדיקה:", hub_names, key='manual_station_select')
         btn_manual = st.button("בדוק את התחנה הזו 🎯", use_container_width=True)
 
@@ -145,50 +150,29 @@ with st.sidebar:
         MAX_STATIONS = 6
 
 
-# --- HELPER FUNCTIONS ---
-def process_single_station(origin, dest, station_name, dept_dt):
-    target_hub = next((h for h in my_hubs if h['name'] == station_name), None)
-    if not target_hub: return None
-    
-    r_points, _, base_sec, base_traf = logic.get_route_data(origin, dest, dept_dt)
-    if not r_points: return None
-    
-    st.session_state.base_route = r_points
-
-    detour, d_points, _, gate_coords, arr_hub, traf_stat = logic.calculate_driver_segment(
-        origin, dest, target_hub, base_sec, dept_dt
-    )
-    
-    if detour is None: return None
-    
-    tr_min, fin_arr, itin, _, gap, tr_shape = logic.calculate_passenger_transit(
-        gate_coords, st.session_state.passenger_dest, arr_hub 
-    )
-    
-    return {
-        'name': target_hub['name'],
-        'detour': detour,
-        'arr_hub': arr_hub,
-        'traffic': traf_stat,
-        'fin_arr': fin_arr,
-        'gap': gap,
-        'route': d_points,
-        'transit_route': tr_shape,
-        'itinerary': itin,
-        'coords': gate_coords,
-        'found_transit': tr_min is not None
-    }
-
-
 # --- MAIN LOGIC ---
 
-# משתנים משותפים
-dept_dt = datetime.combine(trip_date, trip_time)
+# 1. איחוד תאריך ושעה
+dept_dt_naive = datetime.combine(trip_date, trip_time)
+# המרה לשעון ישראל
+il_tz = pytz.timezone('Asia/Jerusalem')
+dept_dt = il_tz.localize(dept_dt_naive)
+
 origin_val = st.session_state.driver_origin
 dest_val = st.session_state.driver_dest
 
-# A. לוגיקה לבדיקה ידנית
+# --- תוספת קריטית: מניעת חישוב בזמן עבר ---
+def validate_time():
+    now = datetime.now(il_tz)
+    # מאפשרים הפרש של 10 דקות אחורה (למקרה שהשעון לא מכוון או שלוקח זמן ללחוץ)
+    if dept_dt < now - timedelta(minutes=10):
+        st.error(f"⏳ לא ניתן לתכנן נסיעה לעבר... (השעה שבחרת: {dept_dt.strftime('%H:%M')})")
+        st.info("נא לבחור שעה עתידית ולנסות שוב.")
+        st.stop() # עוצר את הריצה כאן
+
+# לוגיקה לבדיקה ידנית
 if btn_manual:
+    validate_time() # בדיקת זמן
     st.session_state.best_options = None 
     st.session_state.manual_result = None
     st.session_state.selected_opt_key = 'manual'
@@ -203,7 +187,6 @@ if btn_manual:
                 origin_val, dest_val, target_hub, base_sec, dept_dt
             )
             
-            # --- התיקון כאן: בדיקה ש-arr_hub אינו None ---
             if detour is not None and arr_hub is not None:
                 tr_min, fin_arr, itin, _, gap, tr_shape = logic.calculate_passenger_transit(
                     gate_coords, passenger_dest, arr_hub
@@ -224,11 +207,11 @@ if btn_manual:
                 }
                 st.session_state.manual_result = res
             else:
-                st.error("❌ לא ניתן להגיע לתחנה זו עם הרכב (גוגל לא מצא מסלול חוקי).")
+                st.error("❌ לא ניתן להגיע לתחנה זו עם הרכב.")
 
-
-# B. לוגיקה לחישוב אוטומטי
+# לוגיקה לחישוב אוטומטי
 if btn_auto:
+    validate_time() # בדיקת זמן
     st.session_state.manual_result = None 
     st.session_state.selected_opt_key = None 
 
@@ -362,7 +345,6 @@ if st.session_state.manual_result:
         render_card_content(st.session_state.manual_result, "בדיקה ספציפית", "🎯", is_manual=True)
         if st.button("הצג במפה 👁️", key="btn_manual_map", use_container_width=True):
              st.session_state.selected_opt_key = 'manual'
-
 
 # 2. Auto Results
 elif st.session_state.best_options:
