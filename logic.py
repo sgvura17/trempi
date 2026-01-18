@@ -3,18 +3,19 @@ import polyline
 import math
 from datetime import datetime, timedelta
 import streamlit as st
-import pytz  # <--- הוספנו את זה לטיפול בשעון ישראל
+import pytz
 
 # --- הגדרת שעון ישראל ---
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
-# --- טיפול במפתח API ---
+# --- שליפת מפתח API בצורה מאובטחת ---
+# הקוד הזה יחפש את המפתח ב-secrets של Streamlit (בענן או בקובץ המקומי)
+# אם הוא לא ימצא, הוא יעצור ויציג שגיאה ברורה במקום לקרוס
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
-except FileNotFoundError:
-    API_KEY = 'AIzaSyAnXQ-ES0Ls3JZ0ZwYN-njOF70bFUfqYUg'
 except Exception:
-     API_KEY = 'AIzaSyAnXQ-ES0Ls3JZ0ZwYN-njOF70bFUfqYUg'
+    st.error("⚠️ שגיאה: מפתח ה-API חסר. נא להגדיר את GOOGLE_API_KEY ב-secrets.")
+    st.stop()
 
 # --- פונקציות עזר ---
 
@@ -22,7 +23,6 @@ def ensure_israel_time(dt_obj):
     """ממיר זמן נאיבי (בלי אזור זמן) לשעון ישראל"""
     if dt_obj is None: return None
     if dt_obj.tzinfo is None:
-        # אם אין הגדרה, מניחים שזה שעון ישראל
         return IL_TZ.localize(dt_obj)
     return dt_obj.astimezone(IL_TZ)
 
@@ -59,8 +59,6 @@ def find_physically_close_hubs(driver_route_points, hubs_database, radius_km):
 def get_route_data(origin, destination, departure_time):
     try:
         gmaps = googlemaps.Client(key=API_KEY)
-        
-        # המרה לשעון ישראל כדי שגוגל יבין נכון את השעה
         departure_time = ensure_israel_time(departure_time)
         
         directions = gmaps.directions(origin, destination, mode="driving", departure_time=departure_time)
@@ -77,8 +75,6 @@ def get_route_data(origin, destination, departure_time):
 
 def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_time):
     gmaps = googlemaps.Client(key=API_KEY)
-    
-    # המרה לשעון ישראל
     departure_time = ensure_israel_time(departure_time)
     
     best_detour_mins = float('inf')
@@ -104,10 +100,7 @@ def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_t
                 if added_minutes < best_detour_mins:
                     best_detour_mins = added_minutes
                     best_route_points = polyline.decode(directions[0]['overview_polyline']['points'])
-                    
-                    # חישוב זמן הגעה מתוקן
                     arrival_time_at_hub = departure_time + timedelta(seconds=traffic_seconds_to_hub)
-                    
                     segment_traffic_status = get_traffic_status(seconds_to_hub, traffic_seconds_to_hub)
                     best_gate_name = gate['label']                 
                     best_gate_coords = (gate['lat'], gate['lon'])  
@@ -117,8 +110,6 @@ def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_t
 
 def calculate_passenger_transit(hub_coords, passenger_dest, arrival_time):
     gmaps = googlemaps.Client(key=API_KEY)
-    
-    # המרה לשעון ישראל
     arrival_time = ensure_israel_time(arrival_time)
     
     search_time_back = arrival_time - timedelta(minutes=20)
@@ -134,8 +125,6 @@ def calculate_passenger_transit(hub_coords, passenger_dest, arrival_time):
         if directions:
             for route in directions:
                 leg = route['legs'][0]
-                
-                # המרת זמן יציאת הרכבת לשעון ישראל לצורך השוואה
                 dep_time_val = leg['departure_time']['value']
                 dep_time = datetime.fromtimestamp(dep_time_val, IL_TZ)
                 
@@ -158,7 +147,6 @@ def calculate_passenger_transit(hub_coords, passenger_dest, arrival_time):
         leg = selected_route['legs'][0]
         transit_duration_mins = int(leg['duration']['value'] / 60)
         
-        # המרת זמני יציאה והגעה לשעון ישראל להצגה נכונה
         arrival_at_final_dest_timestamp = leg['arrival_time']['value']
         final_arrival_dt = datetime.fromtimestamp(arrival_at_final_dest_timestamp, IL_TZ)
         
@@ -190,8 +178,6 @@ def calculate_passenger_transit(hub_coords, passenger_dest, arrival_time):
                     short_name = line.get('short_name', '') 
                     headsign = details.get('headsign', '') 
                     
-                    # תיקון קריטי: לוקחים את השעה מהאובייקט המתוקן שלנו ולא מהטקסט של גוגל
-                    # (לפעמים גוגל מחזיר טקסט באזור זמן לא נכון, אז נבנה אותו לבד)
                     step_dep_ts = details.get('departure_time', {}).get('value')
                     if step_dep_ts:
                         step_time_str = datetime.fromtimestamp(step_dep_ts, IL_TZ).strftime("%H:%M")
