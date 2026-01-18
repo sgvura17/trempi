@@ -75,7 +75,17 @@ def get_route_data(origin, destination, departure_time):
         print(f"API Error: {e}")
         return None, None, None, None
 
-def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_time):
+# --- השינוי כאן: הוספנו פרמטר driver_start_coords ---
+def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_time, driver_start_coords=None):
+    
+    # 1. בדיקת "מרחק אפס" (Zero Distance Check)
+    # אם הנהג נמצא פיזית במרחק של פחות מ-400 מטר מהתחנה, נבטל את הנסיעה המיותרת
+    if driver_start_coords:
+        dist_from_start = haversine_distance(driver_start_coords[0], driver_start_coords[1], hub['lat'], hub['lon'])
+        if dist_from_start < 0.4: # פחות מ-400 מטר
+            # מחזירים תוצאה מיידית כאילו כבר הגענו
+            return 0, [], hub['name'], (hub['lat'], hub['lon']), departure_time, ("כבר במקום", "green")
+
     gmaps = googlemaps.Client(key=API_KEY)
     departure_time = ensure_israel_time(departure_time)
     
@@ -110,46 +120,35 @@ def calculate_driver_segment(origin, driver_dest, hub, base_seconds, departure_t
         
     return best_detour_mins, best_route_points, best_gate_name, best_gate_coords, arrival_time_at_hub, segment_traffic_status
 
-# --- הלוגיקה המשופרת לחייל ---
 def calculate_passenger_transit(origin, passenger_dest, arrival_time):
     gmaps = googlemaps.Client(key=API_KEY)
     arrival_time = ensure_israel_time(arrival_time)
     
     origin_str = ""
-    # 1. טיפול חכם בשם התחנה: הוספת "Train Station" כדי למנוע הליכה מהעיר
     if isinstance(origin, str):
-        # מנקה סוגריים בעברית אם יש, ומוסיף Train Station
         clean_name = origin.split('(')[0].strip()
         origin_str = f"{clean_name} Train Station, Israel"
     elif isinstance(origin, (tuple, list)):
         origin_str = f"{origin[0]},{origin[1]}"
 
-    # 2. ה"צ'יט" לפתרון באג ה-2 דקות:
-    # אנחנו מחפשים רכבת כאילו הגענו 5 דקות קודם. 
-    # זה יגרום לגוגל "לתפוס" את הרכבת הקרובה, והמערכת שלנו תציג "לרוץ!" (פער שלילי)
     fake_arrival_time = arrival_time - timedelta(minutes=5)
     
     selected_route = None
     
     try:
-        # ניסיון ראשון: חיפוש רגיל מהזמן המוקדם
         directions = gmaps.directions(
             origin=origin_str,
             destination=passenger_dest,
             mode="transit", transit_mode="train", departure_time=fake_arrival_time
         )
         
-        # לוגיקת בחירה: מחפשים את הרכבת הראשונה שיוצאת *אחרי* ההגעה האמיתית (או ממש קרוב אליה)
         if directions:
             for route in directions:
                 leg = route['legs'][0]
                 dep_time_val = leg['departure_time']['value']
                 dep_time = datetime.fromtimestamp(dep_time_val, IL_TZ)
                 
-                # חישוב הפער מההגעה *האמיתית* (לא המזויפת)
                 gap_minutes = (dep_time - arrival_time).total_seconds() / 60
-                
-                # אנחנו מתירים גם מינוס קטן (למשל מינוס 2 דקות) כי אולי החייל ירוץ
                 if gap_minutes >= -2: 
                     selected_route = route
                     break 
@@ -165,7 +164,6 @@ def calculate_passenger_transit(origin, passenger_dest, arrival_time):
         train_departure_timestamp = leg['departure_time']['value']
         train_departure_dt = datetime.fromtimestamp(train_departure_timestamp, IL_TZ)
         
-        # חישוב זמן המתנה אמיתי
         wait_time_at_platform = int((train_departure_dt - arrival_time).total_seconds() / 60)
         transit_polyline_points = polyline.decode(selected_route['overview_polyline']['points'])
         
@@ -179,7 +177,6 @@ def calculate_passenger_transit(origin, passenger_dest, arrival_time):
                     if "min" in duration:
                         try:
                             mins = int(duration.split()[0])
-                            # מסנן הליכות קצרות בתוך התחנה
                             if mins > 5: itinerary.append(f"🚶 הליכה ({duration})")
                         except: pass
                 
