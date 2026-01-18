@@ -203,7 +203,6 @@ if btn_manual:
             r_points, _, base_sec, base_traf = logic.get_route_data(origin_val, dest_val, dept_dt)
             st.session_state.base_route = r_points
             
-            # אם r_points קיים, שולחים את נקודת ההתחלה. אם לא, שולחים None
             start_coord = r_points[0] if r_points else None
             
             detour, d_points, _, gate_coords, arr_hub, traf_stat = logic.calculate_driver_segment(
@@ -412,7 +411,7 @@ if st.session_state.base_route:
             sel = st.session_state.best_options.get(active_key)
             
         if sel:
-            # --- התיקון לשגיאת המפה: בודקים אם יש מסלול לפני שמציירים ---
+            # --- התיקון כאן: בדיקה לפני שמוסיפים קו ריק ---
             if sel['route'] and len(sel['route']) > 0:
                 folium.PolyLine(sel['route'], color="#e74c3c", weight=5, opacity=0.8).add_to(m)
             
