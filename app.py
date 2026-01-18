@@ -4,8 +4,7 @@ import folium
 from streamlit_folium import st_folium
 import streamlit.components.v1 as components
 import pytz
-
-# ספריה למיקום נוכחי
+import urllib.parse
 from streamlit_js_eval import get_geolocation
 
 # --- IMPORTS ---
@@ -66,8 +65,9 @@ def show_welcome_modal():
 # --- INITIALIZE STATE ---
 if 'first_visit' not in st.session_state: st.session_state.first_visit = True 
 
-if 'driver_origin' not in st.session_state: st.session_state.driver_origin = "Kibbutz Beeri"
-if 'driver_dest' not in st.session_state: st.session_state.driver_dest = "Rishon LeTsion"
+if 'driver_origin' not in st.session_state: st.session_state.driver_origin = ""
+if 'driver_dest' not in st.session_state: st.session_state.driver_dest = ""
+if 'passenger_dest' not in st.session_state: st.session_state.passenger_dest = "" # יעד חייל בטקסט
 
 if 'trip_date' not in st.session_state: st.session_state.trip_date = date.today()
 if 'trip_time' not in st.session_state: 
@@ -89,31 +89,36 @@ def swap_locations():
     st.session_state.driver_origin = st.session_state.driver_dest
     st.session_state.driver_dest = temp
 
+def set_location(key, value):
+    st.session_state[key] = value
+
 # --- SIDEBAR UI ---
 with st.sidebar:
     st.title("Trempi 🪖")
     st.caption("מערכת אופטימיזציה לשינוע חיילים")
     st.divider()
 
+    # --- DRIVER SECTION ---
     st.subheader("🚗 מסלול הנהג")
     
-    # --- כפתור מיקום נוכחי ---
-    # הספריה get_geolocation עובדת קצת שונה מכפתור רגיל. היא מחזירה את המיקום ברגע שהדף נטען.
-    # אנחנו נשתמש בזה כדי לאכלס את השדה אם המיקום קיים בזיכרון.
+    # 1. מיקום נוכחי
     loc = get_geolocation()
     if loc:
-        # בדיקה שהמיקום תקין
         lat = loc.get('coords', {}).get('latitude')
         lon = loc.get('coords', {}).get('longitude')
         if lat and lon:
-            # כפתור שמופיע רק כשיש מיקום זמין מהדפדפן
-            if st.button(f"📍 השתמש במיקום הנוכחי שלי", help="לחץ כדי להעתיק את המיקום למוצא"):
+            if st.button(f"📍 מיקום נוכחי", help="השתמש במיקום שלי כמוצא"):
                 address = logic.reverse_geocode(lat, lon)
                 if address:
                     st.session_state.driver_origin = address
-                    st.success("המיקום עודכן!")
-                    st.rerun() # רענון כדי שהשדה יתעדכן ויזואלית
-    # ---------------------------
+                    st.rerun()
+
+    # 2. כפתורים מהירים נהג
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        if st.button("🏠 הביתה", key="drv_home"): set_location('driver_dest', 'Tel Aviv') 
+    with col_p2:
+        if st.button("🪖 לבסיס", key="drv_base"): set_location('driver_dest', 'Kibbutz Beeri') 
 
     st.text_input("מוצא (מאיפה יוצאים?)", key='driver_origin')
     
@@ -124,12 +129,19 @@ with st.sidebar:
     st.text_input("יעד (לאן נוסעים?)", key='driver_dest')
     st.divider()
     
+    # --- PASSENGER SECTION ---
     st.subheader("🪖 פרטי החייל")
-    passenger_dest = st.selectbox(
-        "יעד סופי (בחר תחנה או צומת)", 
-        options=hub_names, 
-        index=hub_names.index("Haifa Hof HaCarmel (חיפה חוף הכרמל)") if "Haifa Hof HaCarmel (חיפה חוף הכרמל)" in hub_names else 0
-    )
+    
+    # כפתורים מהירים חייל
+    col_soldier1, col_soldier2 = st.columns(2)
+    with col_soldier1:
+        if st.button("🏠 הביתה", key="soldier_home"): set_location('passenger_dest', 'Haifa')
+    with col_soldier2:
+        if st.button("🪖 לבסיס", key="soldier_base"): set_location('passenger_dest', 'Kiryat HaHadracha')
+        
+    # כאן השינוי: במקום SelectBox, טקסט חופשי
+    st.text_input("לאן החייל צריך להגיע בסוף?", key='passenger_dest', placeholder="לדוגמה: דיזנגוף סנטר / עיר הבה\"דים")
+    
     st.divider()
     
     col_d, col_t = st.columns(2)
@@ -140,8 +152,9 @@ with st.sidebar:
     btn_auto = st.button("🚀 חשב מסלול אופטימלי", type="primary", use_container_width=True)
     
     st.divider()
+    # בדיקה ידנית - כאן עדיין בוחרים תחנה, אבל היעד הסופי הוא הכתובת שהוזנה
     with st.expander("🕵️ חשדניסט? בדיקת תחנה ספציפית"):
-        manual_station_name = st.selectbox("בחר תחנה לבדיקה:", hub_names, key='manual_station_select')
+        manual_station_name = st.selectbox("בחר תחנת הורדה לבדיקה:", hub_names, key='manual_station_select')
         btn_manual = st.button("בדוק את התחנה הזו 🎯", use_container_width=True)
 
     with st.expander("⚙️ הגדרות מתקדמות"):
@@ -151,33 +164,32 @@ with st.sidebar:
 
 
 # --- MAIN LOGIC ---
-
-# 1. איחוד תאריך ושעה
 dept_dt_naive = datetime.combine(trip_date, trip_time)
-# המרה לשעון ישראל
 il_tz = pytz.timezone('Asia/Jerusalem')
 dept_dt = il_tz.localize(dept_dt_naive)
 
 origin_val = st.session_state.driver_origin
 dest_val = st.session_state.driver_dest
+pass_dest_val = st.session_state.passenger_dest # היעד הסופי של החייל (טקסט)
 
-# --- תוספת קריטית: מניעת חישוב בזמן עבר ---
-def validate_time():
+def validate_inputs():
     now = datetime.now(il_tz)
-    # מאפשרים הפרש של 10 דקות אחורה (למקרה שהשעון לא מכוון או שלוקח זמן ללחוץ)
     if dept_dt < now - timedelta(minutes=10):
         st.error(f"⏳ לא ניתן לתכנן נסיעה לעבר... (השעה שבחרת: {dept_dt.strftime('%H:%M')})")
-        st.info("נא לבחור שעה עתידית ולנסות שוב.")
-        st.stop() # עוצר את הריצה כאן
+        st.stop()
+    if not origin_val or not dest_val or not pass_dest_val:
+        st.error("⚠️ נא למלא את כל הכתובות (מוצא, יעד נהג, יעד חייל).")
+        st.stop()
 
-# לוגיקה לבדיקה ידנית
+# --- PROCESSING LOGIC ---
+
 if btn_manual:
-    validate_time() # בדיקת זמן
+    validate_inputs()
     st.session_state.best_options = None 
     st.session_state.manual_result = None
     st.session_state.selected_opt_key = 'manual'
     
-    with st.spinner(f"בודק ספציפית את {manual_station_name}..."):
+    with st.spinner(f"בודק הורדה ב-{manual_station_name} והגעה ל-{pass_dest_val}..."):
         target_hub = next((h for h in my_hubs if h['name'] == manual_station_name), None)
         if target_hub:
             r_points, _, base_sec, base_traf = logic.get_route_data(origin_val, dest_val, dept_dt)
@@ -188,8 +200,9 @@ if btn_manual:
             )
             
             if detour is not None and arr_hub is not None:
+                # שולחים לחישוב את היעד הסופי של החייל (הכתובת)
                 tr_min, fin_arr, itin, _, gap, tr_shape = logic.calculate_passenger_transit(
-                    gate_coords, passenger_dest, arr_hub
+                    gate_coords, pass_dest_val, arr_hub
                 )
                 
                 res = {
@@ -209,16 +222,15 @@ if btn_manual:
             else:
                 st.error("❌ לא ניתן להגיע לתחנה זו עם הרכב.")
 
-# לוגיקה לחישוב אוטומטי
 if btn_auto:
-    validate_time() # בדיקת זמן
+    validate_inputs()
     st.session_state.manual_result = None 
     st.session_state.selected_opt_key = None 
 
     if dept_dt.weekday() == 5 or (dept_dt.weekday() == 4 and dept_dt.hour > 15):
         st.toast("⚠️ חיפוש בסופ\"ש - ייתכן ואין רכבות", icon="🕍")
 
-    with st.spinner('🤖 Trempi מנתח נתונים...'):
+    with st.spinner(f'🤖 מחפש את המסלול הטוב ביותר ל-{pass_dest_val}...'):
         r_points, base_text, base_sec, base_traf = logic.get_route_data(origin_val, dest_val, dept_dt)
         
         if r_points:
@@ -227,7 +239,7 @@ if btn_auto:
             candidates.sort(key=lambda x: x['geo_distance'])
             
             opts = []
-            my_bar = st.progress(0, text="בודק תחנות...")
+            my_bar = st.progress(0, text="בודק נקודות הורדה...")
             limit_check = min(len(candidates), MAX_STATIONS)
             
             for i, station in enumerate(candidates[:limit_check]):
@@ -237,8 +249,9 @@ if btn_auto:
                 )
                 
                 if detour is not None and detour <= MAX_DETOUR:
+                    # שינוי: מעבירים את הכתובת החופשית של החייל
                     tr_min, fin_arr, itin, dep_tm, gap, tr_shape = logic.calculate_passenger_transit(
-                        gate_coords, passenger_dest, arr_hub
+                        gate_coords, pass_dest_val, arr_hub
                     )
                     
                     if tr_min is not None:
@@ -260,15 +273,16 @@ if btn_auto:
             # Full Ride
             driver_dest_arrival = dept_dt + timedelta(seconds=base_traf)
             end_coords = r_points[-1]
+            # שינוי: מעבירים את הכתובת החופשית של החייל
             tr_min_full, fin_arr_full, itin_full, _, gap_full, tr_shape_full = logic.calculate_passenger_transit(
-                end_coords, passenger_dest, driver_dest_arrival
+                end_coords, pass_dest_val, driver_dest_arrival
             )
             
             full_ride_opt = None
             if tr_min_full is not None:
                  full_ride_opt = {
                     'key': 'full_ride',
-                    'name': f"Driver's Destination ({dest_val})",
+                    'name': f"יעד הנהג ({dest_val})",
                     'detour': 0,
                     'arr_hub': driver_dest_arrival,
                     'traffic': logic.get_traffic_status(base_sec, base_traf),
@@ -306,21 +320,21 @@ def render_card_content(data, title, icon, is_manual=False):
     else:
         st.markdown(f"#### {icon} {title}")
         
-    st.markdown(f"**📍 {data['name']}**")
+    st.markdown(f"**📍 נקודת הורדה: {data['name']}**")
     
     t_text, t_color = data['traffic']
-    st.markdown(f"<small>מצב כביש: <span style='color:{t_color}; font-weight:bold'>{t_text}</span></small>", unsafe_allow_html=True)
+    st.markdown(f"<small>מצב כביש לנהג: <span style='color:{t_color}; font-weight:bold'>{t_text}</span></small>", unsafe_allow_html=True)
     st.divider()
     
     if data.get('found_transit', True): 
         c_a, c_b = st.columns(2)
         with c_a: st.metric("הורדה", fmt_time(data['arr_hub']), delta=f"+{data['detour']} דק'", delta_color="inverse")
-        with c_b: st.metric("יעד חייל", fmt_time(data['fin_arr']))
+        with c_b: st.metric("הגעה ליעד", fmt_time(data['fin_arr']))
         
         gap = data['gap']
         if gap is not None:
-            if gap >= 15: msg, color = f"☕ יש זמן ({gap} דק')", "green"
-            elif gap >= 5: msg, color = f"👍 מעולה ({gap} דק')", "blue"
+            if gap >= 15: msg, color = f"☕ המתנה ({gap} דק')", "green"
+            elif gap >= 5: msg, color = f"👍 קונקשיין טוב ({gap} דק')", "blue"
             elif gap >= 0: msg, color = f"🏃 לרוץ! ({gap} דק')", "orange"
             else: msg, color = f"⚠️ צפוף ({gap} דק')", "red"
             st.markdown(f"**:{color}[{msg}]**")
@@ -329,14 +343,20 @@ def render_card_content(data, title, icon, is_manual=False):
         waze_url = f"https://waze.com/ul?ll={lat},{lon}&navigate=yes"
         gmaps_url = f"https://www.google.com/maps/dir/?api=1&destination={lat},{lon}"
         c_waze, c_gmaps = st.columns(2)
-        with c_waze: st.link_button("🚗 Waze", waze_url, use_container_width=True)
-        with c_gmaps: st.link_button("🗺️ Maps", gmaps_url, use_container_width=True)
+        with c_waze: st.link_button("🚗 Waze לנהג", waze_url, use_container_width=True)
+        with c_gmaps: st.link_button("🗺️ מפה", gmaps_url, use_container_width=True)
 
-        with st.expander("📋 פרטי תחבורה"):
+        # כפתור וואטסאפ
+        msg_text = f"היי! אני מוריד אותך ב*{data['name']}* ב-{fmt_time(data['arr_hub'])}.\n" \
+                   f"משם יש לך: {data['itinerary'][0] if data['itinerary'] else 'תחבורה'}."
+        encoded_msg = urllib.parse.quote(msg_text)
+        st.link_button("💬 שלח לחייל בוואטסאפ", f"https://wa.me/?text={encoded_msg}", use_container_width=True)
+
+        with st.expander("📋 מסלול החייל (מההורדה ליעד)"):
             for step in data['itinerary']: st.markdown(f"- {step}")
             
     else:
-        st.warning(f"❌ הגעה לתחנה ב-{fmt_time(data['arr_hub'])}, אך לא נמצא חיבור תחב\"צ ליעד.")
+        st.warning(f"❌ הגעה לתחנה ב-{fmt_time(data['arr_hub'])}, אך לא נמצא חיבור תחב\"צ ליעד הסופי.")
         st.metric("עיקוף לנהג", f"{data['detour']} דק'")
 
 # 1. Manual Result
@@ -375,7 +395,7 @@ if st.session_state.base_route:
         m = folium.Map(location=[avg_lat, avg_lon], zoom_start=10, control_scale=True)
         
         folium.PolyLine(base_points, color="#3388ff", weight=4, opacity=0.4).add_to(m)
-        folium.Marker(base_points[0], tooltip="מוצא", icon=folium.Icon(color="blue", icon="car", prefix="fa")).add_to(m)
+        folium.Marker(base_points[0], tooltip="מוצא נהג", icon=folium.Icon(color="blue", icon="car", prefix="fa")).add_to(m)
         
         sel = None
         active_key = st.session_state.selected_opt_key
@@ -391,7 +411,7 @@ if st.session_state.base_route:
             if sel.get('transit_route'):
                 folium.PolyLine(sel['transit_route'], color="#2ecc71", weight=5, opacity=0.9, dash_array='10').add_to(m)
                 if len(sel['transit_route']) > 0:
-                    folium.Marker(sel['transit_route'][-1], tooltip="יעד", icon=folium.Icon(color="green", icon="flag", prefix="fa")).add_to(m)
+                    folium.Marker(sel['transit_route'][-1], tooltip="יעד חייל סופי", icon=folium.Icon(color="green", icon="flag", prefix="fa")).add_to(m)
             
             popup_html = f"<b>{sel['name']}</b><br>הורדה: {fmt_time(sel.get('arr_hub'))}"
             folium.Marker(sel['coords'], popup=popup_html, icon=folium.Icon(color="red", icon="arrow-down", prefix="fa")).add_to(m)
@@ -406,4 +426,4 @@ if st.session_state.base_route:
     except Exception as e: st.error(f"שגיאה במפה: {e}")
 
 if not st.session_state.best_options and not st.session_state.manual_result:
-    st.info("👈 הזן פרטים בתפריט הצדדי.")
+    st.info("👈 מלאו את הפרטים בתפריט הצדדי.")
