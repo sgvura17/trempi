@@ -190,12 +190,12 @@ if btn_manual:
             r_points, _, base_sec, base_traf = logic.get_route_data(origin_val, dest_val, dept_dt)
             st.session_state.base_route = r_points
             
+            # השינוי כאן: שליחת נקודת ההתחלה של הנהג (r_points[0]) לבדיקת המרחק
             detour, d_points, _, gate_coords, arr_hub, traf_stat = logic.calculate_driver_segment(
-                origin_val, dest_val, target_hub, base_sec, dept_dt
+                origin_val, dest_val, target_hub, base_sec, dept_dt, driver_start_coords=r_points[0]
             )
             
             if detour is not None and arr_hub is not None:
-                # --- תיקון: שליחת שם התחנה במקום קואורדינטות כדי למנוע הליכה מיותרת ---
                 tr_min, fin_arr, itin, _, gap, tr_shape = logic.calculate_passenger_transit(
                     target_hub['name'], pass_dest_val, arr_hub
                 )
@@ -239,12 +239,13 @@ if btn_auto:
             
             for i, station in enumerate(candidates[:limit_check]):
                 my_bar.progress((i + 1) / limit_check, text=f"בודק את {station['name']}...")
+                
+                # השינוי כאן: שליחת r_points[0]
                 detour, d_points, gate_name, gate_coords, arr_hub, traf_stat = logic.calculate_driver_segment(
-                    origin_val, dest_val, station, base_sec, dept_dt
+                    origin_val, dest_val, station, base_sec, dept_dt, driver_start_coords=r_points[0]
                 )
                 
                 if detour is not None and detour <= MAX_DETOUR:
-                    # --- תיקון: שליחת שם התחנה במקום קואורדינטות ---
                     tr_min, fin_arr, itin, dep_tm, gap, tr_shape = logic.calculate_passenger_transit(
                         station['name'], pass_dest_val, arr_hub
                     )
@@ -268,7 +269,6 @@ if btn_auto:
             # Full Ride
             driver_dest_arrival = dept_dt + timedelta(seconds=base_traf)
             end_coords = r_points[-1]
-            # כאן אנחנו חייבים לשלוח קואורדינטות כי זו כתובת אקראית ולא תחנה
             tr_min_full, fin_arr_full, itin_full, _, gap_full, tr_shape_full = logic.calculate_passenger_transit(
                 end_coords, pass_dest_val, driver_dest_arrival
             )
