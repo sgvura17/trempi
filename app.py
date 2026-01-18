@@ -47,7 +47,35 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- ONBOARDING MODAL ---
+@st.dialog("ברוכים הבאים ל-Trempi! 🪖")
+def show_welcome_modal():
+    st.markdown("""
+    <div style="direction: rtl; text-align: right;">
+    
+    **האפליקציה שתעזור לכם למצוא את נקודת ההורדה המושלמת.**
+    
+    🚗 **אתה נהג?** יוצא מהבסיס הביתה ולוקח איתך חייל, אבל הוא גר רחוק?
+    🪖 **אתה חייל?** מחפש טרמפ אבל הנהג לא מגיע בדיוק ליעד שלך?
+    
+    **איך זה עובד?**
+    1. הזינו את **מוצא ויעד הנהג**.
+    2. הזינו את **היעד הסופי של החייל**.
+    3. לחצו על **"חשב מסלול"**.
+    
+    המערכת תסרוק את המסלול ותמצא צמתים או תחנות רכבת שבהם הנהג יעשה **מינימום עיקוף**, והחייל יקבל **מקסימום נוחות** (רכבת/אוטובוס מהיר ליעד).
+    
+    בהצלחה ונסיעה בטוחה! 🇮🇱
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if st.button("הבנתי, בוא נתחיל! 🚀"):
+        st.session_state.first_visit = False
+        st.rerun()
+
 # --- INITIALIZE STATE ---
+if 'first_visit' not in st.session_state: st.session_state.first_visit = True 
+
 if 'driver_origin' not in st.session_state: st.session_state.driver_origin = "Kibbutz Beeri"
 if 'driver_dest' not in st.session_state: st.session_state.driver_dest = "Rishon LeTsion"
 
@@ -61,7 +89,11 @@ if 'trip_time' not in st.session_state:
 if 'best_options' not in st.session_state: st.session_state.best_options = None
 if 'base_route' not in st.session_state: st.session_state.base_route = None
 if 'selected_opt_key' not in st.session_state: st.session_state.selected_opt_key = None
-if 'manual_result' not in st.session_state: st.session_state.manual_result = None # תוצאה ידנית
+if 'manual_result' not in st.session_state: st.session_state.manual_result = None
+
+# --- TRIGGER MODAL ---
+if st.session_state.first_visit:
+    show_welcome_modal()
 
 # --- CALLBACKS ---
 def swap_locations():
@@ -115,31 +147,24 @@ with st.sidebar:
 
 # --- HELPER FUNCTIONS ---
 def process_single_station(origin, dest, station_name, dept_dt):
-    """פונקציית עזר לחישוב תחנה בודדת"""
-    # 1. מציאת אובייקט התחנה
     target_hub = next((h for h in my_hubs if h['name'] == station_name), None)
     if not target_hub: return None
     
-    # 2. חישוב מסלול בסיס (אם אין)
     r_points, _, base_sec, base_traf = logic.get_route_data(origin, dest, dept_dt)
     if not r_points: return None
     
-    # עדכון מסלול בסיס בזיכרון אם צריך
     st.session_state.base_route = r_points
 
-    # 3. חישוב נהג
     detour, d_points, _, gate_coords, arr_hub, traf_stat = logic.calculate_driver_segment(
         origin, dest, target_hub, base_sec, dept_dt
     )
     
-    if detour is None: return None # לא הצליח למצוא מסלול
+    if detour is None: return None
     
-    # 4. חישוב חייל
     tr_min, fin_arr, itin, _, gap, tr_shape = logic.calculate_passenger_transit(
-        gate_coords, st.session_state.passenger_dest, arr_hub # שים לב: שימוש ביעד החייל מה-session state אבל קריאה ישירה
+        gate_coords, st.session_state.passenger_dest, arr_hub 
     )
     
-    # בשביל בדיקה ידנית, מחזירים תוצאה גם אם אין רכבת (כדי להראות שנכשל)
     return {
         'name': target_hub['name'],
         'detour': detour,
@@ -164,19 +189,11 @@ dest_val = st.session_state.driver_dest
 
 # A. לוגיקה לבדיקה ידנית
 if btn_manual:
-    st.session_state.best_options = None # ניקוי תוצאות אוטומטיות כדי לא לבלבל
+    st.session_state.best_options = None 
     st.session_state.manual_result = None
     st.session_state.selected_opt_key = 'manual'
     
     with st.spinner(f"בודק ספציפית את {manual_station_name}..."):
-        # כאן צריך לגשת לערך של ה-selectbox של היעד נוסע ישירות כי הוא בתוך ה-sidebar
-        # נשתמש בערך האחרון שנבחר ב-UI
-        # אנו מניחים שהמשתמש בחר יעד ב-selectbox הראשי
-        
-        # בגלל מגבלת גישה ל-selectbox שלא בתוך form, ניגש לערך דרך logic calc
-        # אבל ה-logic צריך את היעד. הערך `passenger_dest` זמין מהריצה הנוכחית של הסקריפט.
-        
-        # עדכון פונקציית העזר לקבל יעד חייל:
         target_hub = next((h for h in my_hubs if h['name'] == manual_station_name), None)
         if target_hub:
             r_points, _, base_sec, base_traf = logic.get_route_data(origin_val, dest_val, dept_dt)
@@ -186,7 +203,8 @@ if btn_manual:
                 origin_val, dest_val, target_hub, base_sec, dept_dt
             )
             
-            if detour is not None:
+            # --- התיקון כאן: בדיקה ש-arr_hub אינו None ---
+            if detour is not None and arr_hub is not None:
                 tr_min, fin_arr, itin, _, gap, tr_shape = logic.calculate_passenger_transit(
                     gate_coords, passenger_dest, arr_hub
                 )
@@ -206,12 +224,12 @@ if btn_manual:
                 }
                 st.session_state.manual_result = res
             else:
-                st.error("לא ניתן להגיע לתחנה זו עם הרכב (מרחק רב מדי או שגיאת מסלול).")
+                st.error("❌ לא ניתן להגיע לתחנה זו עם הרכב (גוגל לא מצא מסלול חוקי).")
 
 
-# B. לוגיקה לחישוב אוטומטי (הקוד הרגיל)
+# B. לוגיקה לחישוב אוטומטי
 if btn_auto:
-    st.session_state.manual_result = None # ניקוי בדיקה ידנית
+    st.session_state.manual_result = None 
     st.session_state.selected_opt_key = None 
 
     if dept_dt.weekday() == 5 or (dept_dt.weekday() == 4 and dept_dt.hour > 15):
@@ -296,11 +314,9 @@ st.title("מסלולי נסיעה")
 
 def fmt_time(dt): return dt.strftime("%H:%M") if dt else "--:--"
 
-# פונקציית תצוגה כללית לכרטיס
 def render_card_content(data, title, icon, is_manual=False):
     if not data: return
     
-    # צבע רקע שונה לבדיקה ידנית
     if is_manual:
         st.markdown(f"### 🕵️ {title}")
         st.info("זוהי תוצאה לבדיקה ידנית שביקשת.")
@@ -313,8 +329,7 @@ def render_card_content(data, title, icon, is_manual=False):
     st.markdown(f"<small>מצב כביש: <span style='color:{t_color}; font-weight:bold'>{t_text}</span></small>", unsafe_allow_html=True)
     st.divider()
     
-    # נתונים
-    if data.get('found_transit', True): # אם נמצאה תחב"צ
+    if data.get('found_transit', True): 
         c_a, c_b = st.columns(2)
         with c_a: st.metric("הורדה", fmt_time(data['arr_hub']), delta=f"+{data['detour']} דק'", delta_color="inverse")
         with c_b: st.metric("יעד חייל", fmt_time(data['fin_arr']))
@@ -327,7 +342,6 @@ def render_card_content(data, title, icon, is_manual=False):
             else: msg, color = f"⚠️ צפוף ({gap} דק')", "red"
             st.markdown(f"**:{color}[{msg}]**")
         
-        # כפתורי ניווט
         lat, lon = data['coords']
         waze_url = f"https://waze.com/ul?ll={lat},{lon}&navigate=yes"
         gmaps_url = f"https://www.google.com/maps/dir/?api=1&destination={lat},{lon}"
@@ -342,16 +356,15 @@ def render_card_content(data, title, icon, is_manual=False):
         st.warning(f"❌ הגעה לתחנה ב-{fmt_time(data['arr_hub'])}, אך לא נמצא חיבור תחב\"צ ליעד.")
         st.metric("עיקוף לנהג", f"{data['detour']} דק'")
 
-# 1. הצגת תוצאה ידנית (אם יש)
+# 1. Manual Result
 if st.session_state.manual_result:
     with st.container(border=True):
         render_card_content(st.session_state.manual_result, "בדיקה ספציפית", "🎯", is_manual=True)
-        # מפה לתוצאה ידנית
         if st.button("הצג במפה 👁️", key="btn_manual_map", use_container_width=True):
              st.session_state.selected_opt_key = 'manual'
 
 
-# 2. הצגת תוצאות אוטומטיות (אם יש)
+# 2. Auto Results
 elif st.session_state.best_options:
     opts = st.session_state.best_options
     c1, c2, c3 = st.columns(3)
@@ -371,7 +384,6 @@ elif st.session_state.best_options:
     render_auto_card(c3, "נסיעה מלאה", "🤝", 'full')
 
 # --- MAP RENDER ---
-# מציג מפה אם נבחר משהו (ידני או אוטומטי) או אם יש מסלול בסיס
 if st.session_state.base_route:
     st.divider()
     try:
@@ -383,14 +395,11 @@ if st.session_state.base_route:
         folium.PolyLine(base_points, color="#3388ff", weight=4, opacity=0.4).add_to(m)
         folium.Marker(base_points[0], tooltip="מוצא", icon=folium.Icon(color="blue", icon="car", prefix="fa")).add_to(m)
         
-        # קביעת מה להציג
         sel = None
         active_key = st.session_state.selected_opt_key
         
-        # אם זה ידני
         if active_key == 'manual' and st.session_state.manual_result:
             sel = st.session_state.manual_result
-        # אם זה אוטומטי
         elif st.session_state.best_options:
             if not active_key and st.session_state.best_options.get('fastest'): active_key = 'fastest'
             sel = st.session_state.best_options.get(active_key)
@@ -405,7 +414,6 @@ if st.session_state.base_route:
             popup_html = f"<b>{sel['name']}</b><br>הורדה: {fmt_time(sel.get('arr_hub'))}"
             folium.Marker(sel['coords'], popup=popup_html, icon=folium.Icon(color="red", icon="arrow-down", prefix="fa")).add_to(m)
         
-        # סימון נקודות אחרות (רק במצב אוטומטי)
         if st.session_state.best_options and active_key != 'manual':
              for k, o in st.session_state.best_options.items():
                 if o and k != active_key:
