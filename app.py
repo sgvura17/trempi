@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 from datetime import datetime, timedelta, date, time
 import folium
 from streamlit_folium import st_folium
@@ -34,16 +34,25 @@ st.markdown("""
     h1, h2, h3 { text-align: center; font-family: 'Segoe UI', sans-serif; }
     div[data-testid="stMetricValue"] { font-size: 1.4rem !important; color: #007bff; }
     
-    /* כפתור החלפה מעוצב */
     div.stButton > button:first-child {
         width: 100%;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- INITIALIZE STATE ---
+# --- INITIALIZE STATE (התיקון: אתחול חד פעמי של הזיכרון) ---
 if 'driver_origin' not in st.session_state: st.session_state.driver_origin = "Kibbutz Beeri"
 if 'driver_dest' not in st.session_state: st.session_state.driver_dest = "Rishon LeTsion"
+
+# כאן התיקון לטלפון: מגדירים תאריך/שעה התחלתיים רק אם הם לא קיימים בזיכרון
+if 'trip_date' not in st.session_state: 
+    st.session_state.trip_date = date.today()
+
+if 'trip_time' not in st.session_state: 
+    # עיגול לשעה הקרובה
+    next_hour = (datetime.now() + timedelta(hours=1)).replace(minute=0, second=0)
+    st.session_state.trip_time = next_hour.time()
+
 if 'best_options' not in st.session_state: st.session_state.best_options = None
 if 'base_route' not in st.session_state: st.session_state.base_route = None
 if 'selected_opt_key' not in st.session_state: st.session_state.selected_opt_key = None
@@ -63,10 +72,8 @@ with st.sidebar:
 
     st.subheader("🚗 מסלול הנהג")
     
-    # שדות קלט מחוברים ל-Session State
     st.text_input("מוצא (מאיפה יוצאים?)", key='driver_origin')
     
-    # כפתור החלפה
     col_swap, col_dummy = st.columns([1, 4])
     with col_swap:
         st.button("⇅", on_click=swap_locations, help="החלף כיוון נסיעה", use_container_width=True)
@@ -86,10 +93,10 @@ with st.sidebar:
     
     col_d, col_t = st.columns(2)
     with col_d:
-        trip_date = st.date_input("תאריך", date.today())
+        # שימוש ב-key מחבר את הווידג'ט לזיכרון ומונע איפוס
+        trip_date = st.date_input("תאריך", key='trip_date')
     with col_t:
-        next_hour = (datetime.now() + timedelta(hours=1)).replace(minute=0, second=0)
-        trip_time = st.time_input("שעה", next_hour.time())
+        trip_time = st.time_input("שעה", key='trip_time')
 
     st.divider()
     
@@ -102,10 +109,10 @@ with st.sidebar:
 
 # --- MAIN LOGIC ---
 if btn:
+    # לוקחים את הערכים ישירות מהמשתנים (שהם מחוברים ל-state)
     dept_dt = datetime.combine(trip_date, trip_time)
     st.session_state.selected_opt_key = None 
 
-    # משיכת הערכים מה-State (כי המשתמש אולי ערך אותם ידנית)
     origin_val = st.session_state.driver_origin
     dest_val = st.session_state.driver_dest
 
@@ -193,7 +200,7 @@ if btn:
         else:
             st.error("❌ לא הצלחנו לחשב מסלול. בדוק כתובות.")
 
-# --- DISPLAY RESULTS (הצגת התוצאות) ---
+# --- DISPLAY RESULTS ---
 st.title("מסלולי נסיעה מומלצים")
 
 if st.session_state.best_options:
